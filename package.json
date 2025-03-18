@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "@types/axios": "^0.9.36",
+    "@types/socket.io-client": "^1.4.36",
+    "axios": "^1.8.1",
+    "socket.io-client": "^4.8.1"
+  }
+}

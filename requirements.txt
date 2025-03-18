@@ -1,0 +1,12 @@
+flask~=3.1.0
+mediapipe>=0.10.5
+opencv-python~=4.10.0.84
+numpy~=1.26.4
+tensorflow~=2.17.0
+pyttsx3~=2.98
+SpeechRecognition~=3.14.1
+pygame~=2.6.1
+Flask-SocketIO~=5.3.4
+gTTS~=2.5.4
+opencv-python
+eventlet 

@@ -1,0 +1,22 @@
+/* Add global styles for dark mode */
+body.dark {
+    background-color: #1a202c;
+    color: #e2e8f0;
+  }
+  
+  /* Ensure smooth transitions when toggling dark mode */
+  body,
+  button,
+  div,
+  span,
+  p,
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  }
+  
+  
