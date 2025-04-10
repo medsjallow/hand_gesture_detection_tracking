@@ -1,4 +1,3 @@
-import argparse
 import base64
 import contextlib
 import copy
@@ -6,7 +5,6 @@ import csv
 import itertools
 import os
 import queue
-import sys
 import threading
 import time
 import traceback
@@ -14,28 +12,28 @@ from collections import Counter, deque
 from datetime import datetime, timezone
 
 import cv2 as cv
+import cv2  # Ensure cv2 is also imported for direct usage
 import numpy as np
 import pygame
 import pyttsx3
 import speech_recognition as sr
 import tensorflow as tf
-from flask import Flask, Response, jsonify, render_template
+from flask import Flask, Response, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO
 from gtts import gTTS
+import serial  # Import the serial module
 
-from model import PointHistoryClassifier
+# from model import PointHistoryClassifier
 
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # Disable GPU
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 2 Suppress TensorFlow info messages
 
-
 # Now import other dependencies
 
 tf.get_logger().setLevel('ERROR')
-
 
 app = Flask(__name__)
 CORS(app)
@@ -48,7 +46,6 @@ socketio = SocketIO(app,
                     engineio_logger=False,
                     logger=False)
 
-
 # Global variables for frame sharing
 frame_lock = threading.Lock()
 thread_lock = threading.Lock()
@@ -58,6 +55,7 @@ recording_active = False
 recording_frames = []
 preview_lock = threading.Lock()
 recording_lock = threading.Lock()
+
 global_vars = {
     'controller': None,
     'processing_active': False,
@@ -72,12 +70,13 @@ global_vars = {
     'latest_frame_base64': ''
 }
 
-
 with contextlib.redirect_stderr(open(os.devnull, 'w')):
     import mediapipe as mp
 
     from model import KeyPointClassifier, PointHistoryClassifier
     from utils import CvFpsCalc
+    
+mp_drawing = mp.solutions.drawing_utils
 
 
 class VoiceAssistant:
@@ -204,6 +203,14 @@ class GestureVoiceController:
         self.gesture_combo_buffer = []  # For combo gesture detection
         self.combo_timeout = 3  # Seconds to recognize a combo
         self.last_combo_time = 0
+        
+        
+        self.button_actions = {
+            0: self.toggle_voice_feedback,
+            1: self.toggle_gesture_mode,
+            2: self.emergency_stop
+        }
+
 
         # Add haptic feedback support
         self.haptic_device = None
@@ -354,6 +361,27 @@ class GestureVoiceController:
             "daily_usage_patterns": {},  # Track usage by hour
             "last_feedback": {}  # Store recent user feedback
         }
+        
+    def handle_button_toggle(self, button_id, state):
+        if state == "ON":
+            self.button_actions.get(button_id, lambda: None)()
+
+    def toggle_voice_feedback(self):
+        if self.voice_assistant.is_listening:
+            self.voice_assistant.stop_listening()
+            self.voice_assistant.speak("Voice feedback disabled")
+        else:
+            self.voice_assistant.start_listening()
+            self.voice_assistant.speak("Voice feedback enabled")
+
+    def toggle_gesture_mode(self):
+        self.current_mode = "precise" if self.current_mode == "normal" else "normal"
+        self.voice_assistant.speak(f"{self.current_mode.capitalize()} mode activated")
+
+    def emergency_stop(self):
+        self.voice_assistant.speak("Emergency stop activated")
+        global_vars['processing_active'] = False
+        # Add any additional cleanup here
 
     def try_connect_haptic(self):
         """Attempt to connect to haptic feedback devices if available"""
@@ -408,7 +436,6 @@ class GestureVoiceController:
         self._set_ambient_state("shutdown")
         self.voice_assistant.stop_listening()
 
-
     def process_gesture(self, gesture, confidence=0.8):
         """
         Process detected hand gestures with enhanced stability checking and contextual awareness
@@ -424,13 +451,13 @@ class GestureVoiceController:
         self.gesture_history.append((gesture, confidence))
 
         self.socketio.emit('gesture', {
-        'gesture': gesture,
-        'confidence': confidence,
-        'timestamp': datetime.now().isoformat(),
-        'handedness': 'Right',  # Add actual handedness detection
-        'landmarks': [],  # Add actual landmarks data
-        'bounding_box': []  # Add actual bounding box data
-    })
+            'gesture': gesture,
+            'confidence': confidence,
+            'timestamp': datetime.now().isoformat(),
+            'handedness': 'Right',  # Add actual handedness detection
+            'landmarks': [],  # Add actual landmarks data
+            'bounding_box': []  # Add actual bounding box data
+        })
 
         # Update user model with this gesture detection
         if gesture != "Neutral":
@@ -441,7 +468,6 @@ class GestureVoiceController:
 
         # Get stable gesture with confidence weighting
         stable_gesture, avg_confidence = self._get_stable_gesture()
-
 
         # Context-aware processing
         if self.current_context == "presentation" and gesture in ["Next", "Previous"]:
@@ -460,7 +486,7 @@ class GestureVoiceController:
 
             # Adaptive cooldown based on user preference
             effective_cooldown = self.command_cooldown * \
-                self.user_model["response_speed"]
+                                 self.user_model["response_speed"]
 
             # Response conditions with enhanced logic:
             # 1. First gesture detection
@@ -484,6 +510,8 @@ class GestureVoiceController:
                 # Analyze interaction pattern every 10 interactions
                 if self.interaction_count % 10 == 0:
                     self._update_user_model()
+                    
+    
 
     def _get_stable_gesture(self):
         """
@@ -522,7 +550,7 @@ class GestureVoiceController:
 
         # Calculate average confidence for this gesture
         avg_confidence = sum(confidences.get(most_common_gesture, [
-                             0])) / len(confidences.get(most_common_gesture, [1]))
+            0])) / len(confidences.get(most_common_gesture, [1]))
 
         # Check if most common gesture meets stability threshold
         if weighted_counter[most_common_gesture] >= self.min_stable_frames * 0.6:
@@ -579,6 +607,20 @@ class GestureVoiceController:
             return "professional"
         else:
             return "casual"
+        
+    def draw_rounded_rectangle(img, x, y, w, h, color, corner_radius=20, thickness=-1):
+        # Draw rectangles between corners
+        cv.rectangle(img, (x + corner_radius, y), 
+                (x + w - corner_radius, y + h), color, thickness)
+        cv.rectangle(img, (x, y + corner_radius), 
+                (x + w, y + h - corner_radius), color, thickness)
+    
+        # Draw circular corners
+        for i in range(4):
+            x1 = x + w - corner_radius if i % 2 else x
+            y1 = y + h - corner_radius if i > 1 else y
+            cv.ellipse(img, (x1, y1), (corner_radius, corner_radius), 
+                      i * 90, 0, 90, color, thickness)
 
     def _provide_multimodal_feedback(self, gesture):
         """Provide synchronized feedback across multiple channels"""
@@ -688,7 +730,7 @@ class GestureVoiceController:
         current = self.user_model["gesture_success_rate"][gesture]
         success_value = 1.0 if success else 0.0
         self.user_model["gesture_success_rate"][gesture] = current * \
-            (1 - alpha) + success_value * alpha
+                                                           (1 - alpha) + success_value * alpha
 
     def _detect_environment_context(self):
         """Attempt to detect the user's environment context"""
@@ -778,7 +820,7 @@ class GestureVoiceController:
 
                 elif "resume feedback" in command or "voice on" in command:
                     self.command_cooldown = 1 * \
-                        self.user_model["response_speed"]  # Apply user preference
+                                            self.user_model["response_speed"]  # Apply user preference
                     self.voice_assistant.speak(
                         "Voice feedback resumed. I'll respond to your gestures again.")
                     self._set_ambient_state("active")
@@ -1209,9 +1251,9 @@ Need more details on a specific feature?"""
         # Build diagnostic report
         report = "Diagnostic complete. "
         working_components = [name for name,
-                              status in components.items() if status]
+        status in components.items() if status]
         missing_components = [name for name,
-                              status in components.items() if not status]
+        status in components.items() if not status]
 
         if working_components:
             report += f"Working components: {', '.join(working_components)}. "
@@ -1280,6 +1322,8 @@ def initialize_system():
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5
         )
+        
+
 
         keypoint_classifier = KeyPointClassifier()
         point_history_classifier = PointHistoryClassifier()
@@ -1323,9 +1367,8 @@ def setup_camera(args):
     raise RuntimeError("No available cameras found")
 
 
-
 def process_frames():
-    """Captures and processes video frames for gesture recognition."""
+    """Captures and processes video frames for gesture recognition, including interactive buttons and serial communication."""
     global global_vars
 
     try:
@@ -1349,8 +1392,8 @@ def process_frames():
                 return
                 
             # Set camera properties for better performance
-            cap.set(cv.CAP_PROP_FRAME_WIDTH, 640)
-            cap.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
+            cap.set(cv.CAP_PROP_FRAME_WIDTH, 1280)
+            cap.set(cv.CAP_PROP_FRAME_HEIGHT, 720)
             cap.set(cv.CAP_PROP_FPS, 30)
             
         except Exception as e:
@@ -1358,6 +1401,72 @@ def process_frames():
             socketio.emit('camera_error', {'message': f'Camera setup failed: {str(e)}'})
             return  # Exit safely if camera setup fails
 
+        # Initialize serial communication
+        try:
+            ser = serial.Serial('/dev/ttyUSB0', 9600, timeout=2)  # Adjust port for your system
+            time.sleep(2)  # Allow time for connection to establish
+            serial_connected = True
+            print("Serial port connected successfully")
+        except Exception as e:
+            serial_connected = False
+            print(f"Serial connection failed: {e}")
+            socketio.emit('serial_error', {'message': f'Serial connection failed: {str(e)}'})
+
+        # Initialize button configuration
+        screen_width, screen_height = 1280, 720  # Match the camera resolution
+        button_width, button_height = 200, 50
+        button_margin = 20
+        
+        # Coordinates for the top row buttons
+        button1_x = (screen_width - 3 * button_width - 2 * button_margin) // 2
+        button2_x = button1_x + button_width + button_margin
+        button3_x = button2_x + button_width + button_margin
+        button_y = 20
+        
+        # Position for "Get Data" button (Centered at the bottom)
+        get_data_x = (screen_width - button_width) // 2
+        get_data_y = screen_height - button_height - 30
+        
+        # States of the buttons
+        button_state = ["OFF", "OFF", "OFF", "GET DATA"]
+        button_pressed = [False, False, False, False]
+        button_toggle = [False, False, False, False]
+
+        # Function to control LEDs via serial communication
+        def control_led(button_index, state):
+            if not serial_connected:
+                print(f"Serial not connected, can't send command for Button {button_index + 1}")
+                return
+                
+            command_map = {
+                0: (b'2', b'1'),
+                1: (b'3', b'4'),
+                2: (b'5', b'6'),
+                3: (b'7', None)  # "Get Data" button sends b'7'
+            }
+            
+            if button_index in command_map:
+                command_on, command_off = command_map[button_index]
+                if state == "ON" and command_on:
+                    ser.write(command_on)
+                elif state == "OFF" and command_off:
+                    ser.write(command_off)
+
+            print(f"Button {button_index + 1} sent: {state}")
+            socketio.emit('button_update', {'button': button_index + 1, 'state': state})
+
+        # Function to draw rounded rectangles for buttons
+        def draw_rounded_rectangle(frame, x, y, width, height, color, thickness=2, radius=20):
+            cv.ellipse(frame, (x + radius, y + radius), (radius, radius), 180, 0, 90, color, -1)
+            cv.ellipse(frame, (x + width - radius, y + radius), (radius, radius), 270, 0, 90, color, -1)
+            cv.ellipse(frame, (x + radius, y + height - radius), (radius, radius), 90, 0, 90, color, -1)
+            cv.ellipse(frame, (x + width - radius, y + height - radius), (radius, radius), 0, 0, 90, color, -1)
+            cv.rectangle(frame, (x + radius, y), (x + width - radius, y + height), color, -1)
+            cv.rectangle(frame, (x, y + radius), (x + width, y + height - radius), color, -1)
+            cv.rectangle(frame, (x + radius, y), (x + width - radius, y + height), (0, 0, 0), thickness)
+            cv.rectangle(frame, (x, y + radius), (x + width, y + height - radius), (0, 0, 0), thickness)
+
+        # History variables
         history_length = 16
         point_history = deque(maxlen=history_length)
         finger_gesture_history = deque(maxlen=history_length)
@@ -1407,6 +1516,34 @@ def process_frames():
                 brect = [0, 0, 0, 0]
                 hand_count = 0
 
+                # Always draw all buttons even if no hands are detected
+                # Top row buttons
+                draw_rounded_rectangle(debug_frame, button1_x, button_y, button_width, button_height, 
+                                      (0, 0, 255), -1)  # Red button
+                draw_rounded_rectangle(debug_frame, button2_x, button_y, button_width, button_height, 
+                                      (0, 0, 255), -1)  # Red button
+                draw_rounded_rectangle(debug_frame, button3_x, button_y, button_width, button_height, 
+                                      (0, 0, 255), -1)  # Red button
+                # Get Data button at the bottom
+                draw_rounded_rectangle(debug_frame, get_data_x, get_data_y, button_width, button_height, 
+                                      (0, 0, 255), -1)  # Red button
+
+                # Display button labels centered on buttons
+                font = cv.FONT_HERSHEY_SIMPLEX
+                # Get text size to center text for top row buttons
+                for i in range(3):
+                    text_size = cv.getTextSize(button_state[i], font, 0.8, 2)[0]
+                    button_x = button1_x + i * (button_width + button_margin)
+                    text_x = button_x + (button_width - text_size[0]) // 2
+                    text_y = button_y + (button_height + text_size[1]) // 2
+                    cv.putText(debug_frame, button_state[i], (text_x, text_y), font, 0.8, (255, 255, 255), 2, cv.LINE_AA)
+                
+                # Get Data button text
+                text_size = cv.getTextSize(button_state[3], font, 0.8, 2)[0]
+                text_x = get_data_x + (button_width - text_size[0]) // 2
+                text_y = get_data_y + (button_height + text_size[1]) // 2
+                cv.putText(debug_frame, button_state[3], (text_x, text_y), font, 0.8, (255, 255, 255), 2, cv.LINE_AA)
+
                 if results.multi_hand_landmarks:
                     hand_count = len(results.multi_hand_landmarks)
                     for hand_landmarks, handedness_info in zip(results.multi_hand_landmarks, results.multi_handedness):
@@ -1416,6 +1553,80 @@ def process_frames():
                         # Process landmarks
                         brect = calc_bounding_rect(debug_frame, hand_landmarks)
                         landmark_list = calc_landmark_list(debug_frame, hand_landmarks)
+
+                        # Draw hand landmarks on the debug frame
+                        mp_drawing = mp.solutions.drawing_utils
+                        mp_drawing.draw_landmarks(debug_frame, hand_landmarks, mp.solutions.hands.HAND_CONNECTIONS)
+
+                        # Get the position of the tip of the index finger (landmark 8)
+                        index_finger_tip = hand_landmarks.landmark[mp.solutions.hands.HandLandmark.INDEX_FINGER_TIP]
+                        
+                        # Get the pixel coordinates of the index finger tip
+                        h, w, _ = debug_frame.shape
+                        finger_x = int(index_finger_tip.x * w)
+                        finger_y = int(index_finger_tip.y * h)
+                        
+                        # Draw a circle at the index fingertip location
+                        cv.circle(debug_frame, (finger_x, finger_y), 10, (0, 255, 0), -1)  # Green circle
+                        
+                        # Check if the finger is inside any of the button regions
+                        # Top row buttons
+                        for i in range(3):
+                            button_x = button1_x + i * (button_width + button_margin)
+                            if button_x <= finger_x <= button_x + button_width and button_y <= finger_y <= button_y + button_height:
+                                if not button_pressed[i]:
+                                    # Toggle the button state (ON or OFF)
+                                    button_toggle[i] = not button_toggle[i]
+                                    button_state[i] = "ON" if button_toggle[i] else "OFF"
+                                    control_led(i, button_state[i])  # Send command to hardware
+                                    button_pressed[i] = True
+                                draw_rounded_rectangle(debug_frame, button_x, button_y, button_width, button_height, (0, 255, 0), -1)
+                                # Re-center text on green button
+                                text_size = cv.getTextSize(button_state[i], font, 0.8, 2)[0]
+                                text_x = button_x + (button_width - text_size[0]) // 2
+                                text_y = button_y + (button_height + text_size[1]) // 2
+                                cv.putText(debug_frame, button_state[i], (text_x, text_y), font, 0.8, (255, 255, 255), 2, cv.LINE_AA)
+                            else:
+                                button_pressed[i] = False  # Reset button state
+                        
+                        # Get Data button
+                        if get_data_x <= finger_x <= get_data_x + button_width and get_data_y <= finger_y <= get_data_y + button_height:
+                            if not button_pressed[3]:
+                                button_pressed[3] = True
+                                # Change button appearance
+                                draw_rounded_rectangle(debug_frame, get_data_x, get_data_y, button_width, button_height, (0, 255, 0), -1)
+                                text_size = cv.getTextSize("GETTING...", font, 0.8, 2)[0]
+                                text_x = get_data_x + (button_width - text_size[0]) // 2
+                                text_y = get_data_y + (button_height + text_size[1]) // 2
+                                cv.putText(debug_frame, "GETTING...", (text_x, text_y), font, 0.8, (255, 255, 255), 2, cv.LINE_AA)
+                                
+                                # Request data via serial if connected
+                                if serial_connected:
+                                    try:
+                                        control_led(3, "ON")  # Send command to request data
+                                        time.sleep(0.1)  # Small delay to allow hardware to respond
+                                        received_data = ser.readline().decode('utf-8', errors='ignore').strip()
+                                        print("Received:", received_data)
+                                        socketio.emit('serial_data', {'data': received_data})
+                                        button_state[3] = "OK"  # Display message temporarily
+                                    except Exception as e:
+                                        print("Error reading serial data:", e)
+                                        button_state[3] = "ERROR"
+                                        socketio.emit('serial_error', {'message': f'Read error: {str(e)}'})
+                                else:
+                                    button_state[3] = "NO SERIAL"
+                            else:
+                                # Keep button green while pressed
+                                draw_rounded_rectangle(debug_frame, get_data_x, get_data_y, button_width, button_height, (0, 255, 0), -1)
+                                text_size = cv.getTextSize(button_state[3], font, 0.8, 2)[0]
+                                text_x = get_data_x + (button_width - text_size[0]) // 2
+                                text_y = get_data_y + (button_height + text_size[1]) // 2
+                                cv.putText(debug_frame, button_state[3], (text_x, text_y), font, 0.8, (255, 255, 255), 2, cv.LINE_AA)
+                        else:
+                            button_pressed[3] = False  # Reset button state
+                            # Reset Get Data button to default after a short time
+                            if button_state[3] != "GET DATA" and button_state[3] != "NO SERIAL":
+                                button_state[3] = "GET DATA"
 
                         # Gesture classification
                         pre_processed_landmark_list = pre_process_landmark(landmark_list)
@@ -1451,6 +1662,11 @@ def process_frames():
                                   (brect[0], brect[1] - 10), cv.FONT_HERSHEY_SIMPLEX, 
                                   0.6, (0, 255, 0), 2)
 
+                # Add FPS counter
+                cv.putText(debug_frame, f"FPS: {fps:.1f}", 
+                          (10, screen_height - 10), cv.FONT_HERSHEY_SIMPLEX, 
+                          0.6, (255, 255, 255), 2)
+
                 # Convert frame to base64 for transmission
                 # Reduce image quality for faster transmission
                 encode_param = [int(cv.IMWRITE_JPEG_QUALITY), 80]
@@ -1468,7 +1684,9 @@ def process_frames():
                         'detected_hands_count': hand_count,
                         'current_fps': fps,
                         'gesture_history': list(gesture_history),
-                        'latest_frame_base64': frame_base64
+                        'latest_frame_base64': frame_base64,
+                        'button_states': button_state,
+                        'serial_connected': serial_connected
                     })
 
                 # Emit gesture data via WebSocket
@@ -1482,6 +1700,8 @@ def process_frames():
                     "timestamp": time.time(),
                     "initialized": True,
                     "system_status": "active" if global_vars['processing_active'] else "inactive",
+                    "button_states": button_state,
+                    "serial_connected": serial_connected
                 })
 
             except Exception as e:
@@ -1500,35 +1720,435 @@ def process_frames():
         # Set the processing flag to false to ensure other code knows we've stopped
         global_vars['processing_active'] = False
 
-
         # Release camera resources
         if 'cap' in locals() and cap is not None:
             if cap.isOpened():
                 cap.release()
                 print("Camera released")
 
+        # Close serial connection if open
+        if 'ser' in locals() and serial_connected:
+            ser.close()
+            print("Serial connection closed")
+
         if 'hands' in locals() and hands:
             hands.close()
+            
         # Notify clients
         socketio.emit('system_status', 'inactive')
         socketio.emit('camera_error', {'message': 'Camera processing stopped'})
         print("Processing thread terminated cleanly")
 
-    # finally:
-    #     if 'cap' in locals() and cap is not None and cap.isOpened():
-    #         cap.release()
-    #     if 'hands' in locals() and hands:
-    #         hands.close()
-    #     if 'global_vars' in globals() and 'controller' in global_vars and global_vars['controller']:
-    #         global_vars['controller'].stop()
-    #     cv.destroyAllWindows()
-    #     socketio.emit('system_status', 'inactive')
-    #     print("Processing thread terminated cleanly")
+# def process_frames():
+#     """Captures and processes video frames for gesture recognition, including interactive buttons and serial communication."""
+#     global global_vars
 
+#     try:
+#         # Make sure initialize_system is actually returning all the expected values
+#         initialization_result = initialize_system()
+#         if len(initialization_result) != 5:
+#             print(f"System initialization error: expected 5 return values, got {len(initialization_result)}")
+#             socketio.emit('system_status', 'initialization_error')
+#             return
+            
+#         hands, keypoint_classifier, keypoint_classifier_labels, point_history_classifier, cvFpsCalc = initialization_result
+        
+#         try:
+#             args = get_args()
+#             cap = setup_camera(args)
+            
+#             # Verify camera is properly set up
+#             if not cap or not cap.isOpened():
+#                 print("Camera failed to open")
+#                 socketio.emit('camera_error', {'message': 'Camera failed to open'})
+#                 return
+                
+#             # Set camera properties for better performance
+#             cap.set(cv.CAP_PROP_FRAME_WIDTH, 640)  # Reduced resolution for better performance
+#             cap.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
+#             cap.set(cv.CAP_PROP_FPS, 30)
+            
+#         except Exception as e:
+#             print(f"Camera setup failed: {e}")
+#             socketio.emit('camera_error', {'message': f'Camera setup failed: {str(e)}'})
+#             return  # Exit safely if camera setup fails
+
+#         # Initialize serial communication with a shorter timeout
+#         try:
+#             ser = serial.Serial('/dev/ttyUSB0', 9600, timeout=1)  # Reduced timeout
+#             time.sleep(1)  # Reduced connection wait time
+#             serial_connected = True
+#             print("Serial port connected successfully")
+#         except Exception as e:
+#             serial_connected = False
+#             print(f"Serial connection failed: {e}")
+#             socketio.emit('serial_error', {'message': f'Serial connection failed: {str(e)}'})
+
+#         # Initialize button configuration - adjusted for the new resolution
+#         screen_width, screen_height = 640, 480  # Match the reduced camera resolution
+#         button_width, button_height = 120, 40  # Smaller buttons
+#         button_margin = 15
+        
+#         # Coordinates for the top row buttons
+#         button1_x = (screen_width - 3 * button_width - 2 * button_margin) // 2
+#         button2_x = button1_x + button_width + button_margin
+#         button3_x = button2_x + button_width + button_margin
+#         button_y = 20
+        
+#         # Position for "Get Data" button (Centered at the bottom)
+#         get_data_x = (screen_width - button_width) // 2
+#         get_data_y = screen_height - button_height - 30
+        
+#         # States of the buttons
+#         button_state = ["OFF", "OFF", "OFF", "GET DATA"]
+#         button_pressed = [False, False, False, False]
+#         button_toggle = [False, False, False, False]
+        
+#         # Pre-define colors and fonts for drawing to avoid recreating them each frame
+#         RED = (0, 0, 255)
+#         GREEN = (0, 255, 0)
+#         WHITE = (255, 255, 255)
+#         BLACK = (0, 0, 0)
+#         font = cv.FONT_HERSHEY_SIMPLEX
+
+#         # Function to control LEDs via serial communication - with command caching
+#         last_commands = [None, None, None, None]  # Track last command sent for each button
+        
+#         def control_led(button_index, state):
+#             if not serial_connected:
+#                 return
+                
+#             command_map = {
+#                 0: (b'2', b'1'),
+#                 1: (b'3', b'4'),
+#                 2: (b'5', b'6'),
+#                 3: (b'7', None)  # "Get Data" button sends b'7'
+#             }
+            
+#             # Only send command if it's different from the last one sent
+#             if button_index in command_map:
+#                 command_on, command_off = command_map[button_index]
+#                 current_command = command_on if state == "ON" else command_off
+                
+#                 if current_command != last_commands[button_index] and current_command is not None:
+#                     ser.write(current_command)
+#                     last_commands[button_index] = current_command
+#                     print(f"Button {button_index + 1} sent: {state}")
+#                     socketio.emit('button_update', {'button': button_index + 1, 'state': state})
+
+#         # Optimize the rounded rectangle drawing by pre-computing common elements
+#         def draw_rounded_rectangle(frame, x, y, width, height, color, thickness=2, radius=15):
+#             # Use a faster approach with fewer drawing operations
+#             # Create a filled rectangle first
+#             cv.rectangle(frame, (x, y), (x + width, y + height), color, -1)
+            
+#             # Add rounded corners only if drawing outline
+#             if thickness != -1:
+#                 cv.rectangle(frame, (x, y), (x + width, y + height), BLACK, thickness)
+
+#         # History variables - reduced history length for better performance
+#         history_length = 8  # Reduced from 16
+#         point_history = deque(maxlen=history_length)
+#         finger_gesture_history = deque(maxlen=history_length)
+#         gesture_history = deque(maxlen=5)  # Reduced from 10
+
+#         socketio.emit('system_status', 'active')
+#         print("Camera successfully initialized")
+
+#         # Warm up the camera by reading a few frames
+#         for _ in range(3):  # Reduced warm-up frames
+#             cap.read()
+
+#         # Variables for frame skipping (only process every nth frame for gesture recognition)
+#         frame_count = 0
+#         frame_skip = 1  # Process every second frame
+        
+#         # Variables for WebSocket emission rate limiting
+#         last_emit_time = 0
+#         emit_interval = 1/20  # Limit to 20 FPS for socket emission
+        
+#         # Button positions cache
+#         button_positions = [
+#             (button1_x, button_y, button_width, button_height),
+#             (button2_x, button_y, button_width, button_height),
+#             (button3_x, button_y, button_width, button_height),
+#             (get_data_x, get_data_y, button_width, button_height)
+#         ]
+
+#         while global_vars['processing_active']:
+#             try:
+#                 fps = cvFpsCalc.get()
+#                 key = cv.waitKey(10)
+#                 if key == 27:  # ESC
+#                     break
+
+#                 # Capture frame
+#                 ret, frame = cap.read()
+#                 if not ret:
+#                     print("Error reading frame from camera")
+#                     socketio.emit('camera_error', {'message': 'Frame read error'})
+#                     # Try to reinitialize the camera
+#                     cap.release()
+#                     cap = setup_camera(args)
+#                     if not cap or not cap.isOpened():
+#                         break
+#                     continue
+
+#                 # Flip frame and make a copy for UI drawing
+#                 frame = cv.flip(frame, 1)
+                
+#                 # Skip full processing on some frames to improve performance
+#                 frame_count += 1
+#                 do_full_processing = (frame_count % frame_skip == 0)
+                
+#                 # Always make a copy of the frame for UI drawing
+#                 debug_frame = frame.copy()
+                
+#                 # Initialize variables
+#                 current_gesture = "No Gesture Detected"
+#                 confidence = 0.0
+#                 handedness = "Unknown"
+#                 landmark_list = []
+#                 brect = [0, 0, 0, 0]
+#                 hand_count = 0
+                
+#                 # Process hand detection only on non-skipped frames
+#                 if do_full_processing:
+#                     # RGB conversion only when actually processing hands
+#                     rgb_frame = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+#                     rgb_frame.flags.writeable = False
+#                     results = hands.process(rgb_frame)
+#                     rgb_frame.flags.writeable = True
+                    
+#                     if results and results.multi_hand_landmarks:
+#                         hand_count = len(results.multi_hand_landmarks)
+#                         for hand_landmarks, handedness_info in zip(results.multi_hand_landmarks, results.multi_handedness):
+#                             # Extract handedness (left/right)
+#                             handedness = handedness_info.classification[0].label
+                            
+#                             # Process landmarks
+#                             brect = calc_bounding_rect(debug_frame, hand_landmarks)
+#                             landmark_list = calc_landmark_list(debug_frame, hand_landmarks)
+
+#                             # Draw hand landmarks on the debug frame (simplified for performance)
+#                             mp_drawing = mp.solutions.drawing_utils
+#                             mp_drawing.draw_landmarks(
+#                                 debug_frame, 
+#                                 hand_landmarks, 
+#                                 mp.solutions.hands.HAND_CONNECTIONS,
+#                                 mp.solutions.drawing_styles.get_default_hand_landmarks_style(),
+#                                 mp.solutions.drawing_styles.get_default_hand_connections_style()
+#                             )
+
+#                             # Get the finger tip position
+#                             index_finger_tip = hand_landmarks.landmark[mp.solutions.hands.HandLandmark.INDEX_FINGER_TIP]
+#                             h, w, _ = debug_frame.shape
+#                             finger_x = int(index_finger_tip.x * w)
+#                             finger_y = int(index_finger_tip.y * h)
+                            
+#                             # Draw a circle at the index fingertip location
+#                             cv.circle(debug_frame, (finger_x, finger_y), 8, GREEN, -1)
+                            
+#                             # Check button interactions
+#                             for i in range(4):
+#                                 button_x, button_y, btn_width, btn_height = button_positions[i]
+#                                 if button_x <= finger_x <= button_x + btn_width and button_y <= finger_y <= button_y + btn_height:
+#                                     if not button_pressed[i]:
+#                                         if i < 3:  # For toggle buttons
+#                                             button_toggle[i] = not button_toggle[i]
+#                                             button_state[i] = "ON" if button_toggle[i] else "OFF"
+#                                             control_led(i, button_state[i])
+#                                         else:  # For Get Data button
+#                                             if serial_connected:
+#                                                 try:
+#                                                     control_led(3, "ON")
+#                                                     # Use non-blocking read with timeout
+#                                                     ser.write(b'7')
+#                                                     start_time = time.time()
+#                                                     data_buffer = b''
+#                                                     while time.time() - start_time < 0.5:  # 500ms timeout
+#                                                         if ser.in_waiting > 0:
+#                                                             data_buffer += ser.read(ser.in_waiting)
+#                                                             if b'\n' in data_buffer:
+#                                                                 break
+                                                    
+#                                                     received_data = data_buffer.decode('utf-8', errors='ignore').strip()
+#                                                     if received_data:
+#                                                         print("Received:", received_data)
+#                                                         socketio.emit('serial_data', {'data': received_data})
+#                                                         button_state[3] = "OK"
+#                                                     else:
+#                                                         button_state[3] = "NO DATA"
+#                                                 except Exception as e:
+#                                                     button_state[3] = "ERROR"
+#                                                     socketio.emit('serial_error', {'message': f'Read error: {str(e)}'})
+#                                             else:
+#                                                 button_state[3] = "NO SERIAL"
+                                        
+#                                         button_pressed[i] = True
+                                    
+#                                     # Draw button as green (highlighted)
+#                                     draw_rounded_rectangle(debug_frame, button_x, button_y, btn_width, btn_height, GREEN, -1)
+                                    
+#                                     # Add text
+#                                     text = button_state[i]
+#                                     if i == 3 and button_pressed[i] and button_state[i] == "GET DATA":
+#                                         text = "GETTING..."
+                                    
+#                                     text_size = cv.getTextSize(text, font, 0.6, 2)[0]
+#                                     text_x = button_x + (btn_width - text_size[0]) // 2
+#                                     text_y = button_y + (btn_height + text_size[1]) // 2
+#                                     cv.putText(debug_frame, text, (text_x, text_y), font, 0.6, WHITE, 2, cv.LINE_AA)
+#                                 else:
+#                                     button_pressed[i] = False
+                            
+#                             # Only run classifier on non-skipped frames
+#                             pre_processed_landmark_list = pre_process_landmark(landmark_list)
+#                             hand_sign_id = keypoint_classifier(pre_processed_landmark_list)
+                            
+#                             # Check if the hand_sign_id is valid
+#                             if 0 <= hand_sign_id < len(keypoint_classifier_labels):
+#                                 current_gesture = keypoint_classifier_labels[hand_sign_id]
+#                                 confidence = max(0.7, min(0.99, 0.85 + (hand_sign_id * 0.01)))
+#                             else:
+#                                 current_gesture = "Unknown"
+#                                 confidence = 0.5
+
+#                             # Update controller and history
+#                             if global_vars.get('controller'):
+#                                 global_vars['controller'].process_gesture(current_gesture)
+#                             gesture_history.append(current_gesture)
+
+#                             # Point history tracking (simplified)
+#                             if hand_sign_id == 2:  # Point gesture
+#                                 point_history.append(landmark_list[8] if len(landmark_list) > 8 else [0, 0])
+#                             else:
+#                                 point_history.append([0, 0])
+
+#                             # Draw bounding box with simplified function
+#                             cv.rectangle(debug_frame, (brect[0], brect[1]), (brect[2], brect[3]), GREEN, 2)
+                            
+#                             # Add gesture text
+#                             cv.putText(debug_frame, f"{current_gesture} ({confidence:.2f})", 
+#                                     (brect[0], brect[1] - 10), font, 0.6, GREEN, 2)
+
+#                 # Always draw buttons regardless of hand detection
+#                 for i in range(4):
+#                     button_x, button_y, btn_width, btn_height = button_positions[i]
+#                     if not button_pressed[i]:  # Only draw red if not pressed
+#                         draw_rounded_rectangle(debug_frame, button_x, button_y, btn_width, btn_height, RED, -1)
+                        
+#                         # Add text
+#                         text_size = cv.getTextSize(button_state[i], font, 0.6, 2)[0]
+#                         text_x = button_x + (btn_width - text_size[0]) // 2
+#                         text_y = button_y + (btn_height + text_size[1]) // 2
+#                         cv.putText(debug_frame, button_state[i], (text_x, text_y), font, 0.6, WHITE, 2, cv.LINE_AA)
+
+#                 # Add FPS counter
+#                 cv.putText(debug_frame, f"FPS: {fps:.1f}", 
+#                           (10, screen_height - 10), font, 0.6, WHITE, 2)
+
+#                 # Update global variables safely but only on processed frames
+#                 if do_full_processing:
+#                     with frame_lock:
+#                         global_vars.update({
+#                             'latest_gesture': current_gesture,
+#                             'latest_confidence': confidence,
+#                             'current_handedness': handedness,
+#                             'current_landmarks': landmark_list,
+#                             'current_bounding_box': brect,
+#                             'detected_hands_count': hand_count,
+#                             'current_fps': fps,
+#                             'gesture_history': list(gesture_history),
+#                             'button_states': button_state,
+#                             'serial_connected': serial_connected
+#                         })
+
+#                 # Emit frame via WebSocket, but rate-limited
+#                 current_time = time.time()
+#                 if current_time - last_emit_time >= emit_interval:
+#                     # Compress image with higher compression for faster transmission
+#                     encode_param = [int(cv.IMWRITE_JPEG_QUALITY), 70]  # Higher compression
+#                     _, buffer = cv.imencode('.jpg', debug_frame, encode_param)
+#                     frame_base64 = base64.b64encode(buffer).decode('utf-8')
+                    
+#                     # Save the frame for later use
+#                     with frame_lock:
+#                         global_vars['latest_frame_base64'] = frame_base64
+                    
+#                     # Emit data with minimum payload
+#                     socketio.emit('gesture_update', {
+#                         "frame": frame_base64,
+#                         "gesture": current_gesture,
+#                         "confidence": confidence,
+#                         "handedness": handedness,
+#                         "hand_count": hand_count,
+#                         "fps": fps, 
+#                         "timestamp": current_time,
+#                         "initialized": True,
+#                         "system_status": "active" if global_vars['processing_active'] else "inactive",
+#                         "button_states": button_state,
+#                         "serial_connected": serial_connected
+#                     })
+#                     last_emit_time = current_time
+
+#             except Exception as e:
+#                 print(f"Error in processing loop: {e}")
+#                 traceback.print_exc()
+#                 socketio.emit('camera_error', {'message': f'Processing error: {str(e)}'})
+#                 time.sleep(0.2)  # Shorter sleep on error
+
+#     except Exception as e:
+#         print(f"Camera processing error: {str(e)}")
+#         traceback.print_exc()
+#         socketio.emit('camera_error', {'message': f'Processing error: {str(e)}'})
+
+#     finally:
+#         # Clean up resources
+#         global_vars['processing_active'] = False
+
+#         if 'cap' in locals() and cap is not None:
+#             cap.release()
+#             print("Camera released")
+
+#         if 'ser' in locals() and serial_connected:
+#             ser.close()
+#             print("Serial connection closed")
+
+#         if 'hands' in locals() and hands:
+#             hands.close()
+            
+#         socketio.emit('system_status', 'inactive')
+#         print("Processing thread terminated cleanly")
+
+# Function to draw rounded rectangles for buttons (copied from first code sample)
+def draw_rounded_rectangle(frame, x, y, width, height, color, thickness=2, radius=20):
+    cv.ellipse(frame, (x + radius, y + radius), (radius, radius), 180, 0, 90, color, -1)  # Top-left corner
+    cv.ellipse(frame, (x + width - radius, y + radius), (radius, radius), 270, 0, 90, color, -1)  # Top-right corner
+    cv.ellipse(frame, (x + radius, y + height - radius), (radius, radius), 90, 0, 90, color, -1)  # Bottom-left corner
+    cv.ellipse(frame, (x + width - radius, y + height - radius), (radius, radius), 0, 0, 90, color,
+                -1)  # Bottom-right corner
+    cv.rectangle(frame, (x + radius, y), (x + width - radius, y + height), color, -1)  # Top horizontal
+    cv.rectangle(frame, (x, y + radius), (x + width, y + height - radius), color, -1)  # Vertical sides
+    
+    # # Only draw borders if thickness > 0
+    # if thickness > 0:
+    #     cv.rectangle(frame, (x + radius, y), (x + width - radius, y + height), (0, 0, 0),
+    #                 thickness)  # Top horizontal border
+    #     cv.rectangle(frame, (x, y + radius), (x + width, y + height - radius), (0, 0, 0), thickness)  # Vertical borders
+    #     cv.ellipse(frame, (x + radius, y + radius), (radius, radius), 180, 0, 90, (0, 0, 0), thickness)  # Top-left border
+    #     cv.ellipse(frame, (x + width - radius, y + radius), (radius, radius), 270, 0, 90, (0, 0, 0),
+    #                 thickness)  # Top-right border
+    #     cv.ellipse(frame, (x + radius, y + height - radius), (radius, radius), 90, 0, 90, (0, 0, 0),
+    #                 thickness)  # Bottom-left border
+    #     cv.ellipse(frame, (x + width - radius, y + height - radius), (radius, radius), 0, 0, 90, (0, 0, 0),
+    #                 thickness)  # Bottom-right border
 
 
 
 def select_mode(key, mode):
+   
+   
     number = -1
     if 48 <= key <= 57:  # 0 ~ 9
         number = key - 48
@@ -1634,13 +2254,13 @@ def send_preview_frames():
             # Convert frame to base64
             _, buffer = cv2.imencode('.jpg', frame)
             b64_frame = base64.b64encode(buffer).decode('utf-8')
-            
+
             # Send frame via WebSocket
             socketio.emit('preview_frame', {
                 'frame': b64_frame,
                 'timestamp': datetime.now().isoformat()
             })
-            
+
             # Save frame if recording
             if recording_active:
                 with recording_lock:
@@ -1649,7 +2269,7 @@ def send_preview_frames():
                         'count': len(recording_frames),
                         'timestamp': datetime.now().isoformat()
                     })
-        
+
         time.sleep(0.033)  # ~30 FPS
 
 
@@ -1667,6 +2287,47 @@ def logging_csv(number, mode, landmark_list, point_history_list):
             writer = csv.writer(f)
             writer.writerow([number, *point_history_list])
     return
+
+# Function to draw rounded rectangles for buttons
+
+# Function to draw rounded rectangles for buttons
+def draw_rounded_rectangle(frame, x, y, width, height, color, thickness=2, radius=20):
+    cv2.ellipse(frame, (x + radius, y + radius), (radius, radius), 180, 0, 90, color, -1)  # Top-left corner
+    cv2.ellipse(frame, (x + width - radius, y + radius), (radius, radius), 270, 0, 90, color, -1)  # Top-right corner
+    cv2.ellipse(frame, (x + radius, y + height - radius), (radius, radius), 90, 0, 90, color, -1)  # Bottom-left corner
+    cv2.ellipse(frame, (x + width - radius, y + height - radius), (radius, radius), 0, 0, 90, color,
+                -1)  # Bottom-right corner
+    cv2.rectangle(frame, (x + radius, y), (x + width - radius, y + height), color, -1)  # Top horizontal
+    cv2.rectangle(frame, (x, y + radius), (x + width, y + height - radius), color, -1)  # Vertical sides
+    cv2.rectangle(frame, (x + radius, y), (x + width - radius, y + height), (0, 0, 0),
+                  thickness)  # Top horizontal border
+    cv2.rectangle(frame, (x, y + radius), (x + width, y + height - radius), (0, 0, 0), thickness)  # Vertical borders
+    cv2.ellipse(frame, (x + radius, y + radius), (radius, radius), 180, 0, 90, (0, 0, 0), thickness)  # Top-left border
+    cv2.ellipse(frame, (x + width - radius, y + radius), (radius, radius), 270, 0, 90, (0, 0, 0),
+                thickness)  # Top-right border
+    cv2.ellipse(frame, (x + radius, y + height - radius), (radius, radius), 90, 0, 90, (0, 0, 0),
+                thickness)  # Bottom-left border
+    cv2.ellipse(frame, (x + width - radius, y + height - radius), (radius, radius), 0, 0, 90, (0, 0, 0),
+                thickness)  # Bottom-right border
+
+
+# def draw_rounded_rectangle(img, x, y, w, h, color, corner_radius=20, thickness=-1):
+#     """Draw a rectangle with rounded corners."""
+#     # Draw rectangles between corners
+#     cv.rectangle(img, (x + corner_radius, y), 
+#                  (x + w - corner_radius, y + h), color, thickness)
+#     cv.rectangle(img, (x, y + corner_radius), 
+#                  (x + w, y + h - corner_radius), color, thickness)
+
+#     # Draw circular corners
+#     for i in range(4):
+#         x1 = x + w - corner_radius if i % 2 else x
+#         y1 = y + h - corner_radius if i > 1 else y
+#         cv.ellipse(img, (x1, y1), (corner_radius, corner_radius), 
+#                    i * 90, 0, 90, color, thickness)
+
+#     return img
+
 
 
 def draw_landmarks(image, landmark_point):
@@ -1905,6 +2566,33 @@ def draw_info(image, fps, mode, number):
 
 # Flask Web Application
 # Updated Flask routes
+# @app.route('/start_detection', methods=['POST'])
+# def start_detection():
+#     global global_vars
+
+#     with thread_lock:
+#         if not global_vars['processing_active']:
+#             # Initialize the voice controller
+#             global_vars['controller'] = GestureVoiceController()
+#             global_vars['controller'].start()  # Start voice assistant
+#             global_vars['processing_active'] = True
+#             threading.Thread(target=process_frames, daemon=True).start()
+#             return jsonify({'status': 'Detection Started'})
+#     return jsonify({'status': 'Detection already running'})
+
+
+# @app.route('/stop_detection', methods=['POST'])
+# def stop_detection():
+#     global global_vars
+
+#     if global_vars.get('controller'):
+#         global_vars['controller'].stop()  # Stop voice assistant
+#         global_vars['controller'] = None
+
+#     global_vars['processing_active'] = False
+#     return jsonify({'status': 'Detection Stopped'})
+
+
 @app.route('/start_detection', methods=['POST'])
 def start_detection():
     """Starts gesture detection processing"""
@@ -1932,31 +2620,32 @@ def start_detection():
 @app.route('/stop_detection', methods=['POST'])
 def stop_detection():
     global global_vars
-    
+
     # Set flag to stop processing
     global_vars['processing_active'] = False
-    
+
     # Give the thread time to clean up resources
     time.sleep(0.5)
-    
+
     # Force release camera if still active
     if 'process_thread' in global_vars and global_vars['process_thread'] is not None:
         if global_vars['process_thread'].is_alive():
             # Wait for thread to terminate (with timeout)
             global_vars['process_thread'].join(timeout=2.0)
-            
+
     # Explicitly emit a status update to all clients
     socketio.emit('system_status', 'inactive')
-    
+
     return jsonify({"status": "Detection Stopped"})
+
 
 @app.route('/force_cleanup', methods=['POST'])
 def force_cleanup():
     global global_vars
-    
+
     # Set flag to stop processing
     global_vars['processing_active'] = False
-    
+
     # Force release any camera resources
     for obj_name in list(cv.__dict__.keys()):
         obj = getattr(cv, obj_name)
@@ -1965,10 +2654,10 @@ def force_cleanup():
                 obj.release()
             except:
                 pass
-    
+
     # Notify all clients
     socketio.emit('system_status', 'inactive')
-    
+
     return jsonify({"status": "Emergency Cleanup Complete"})
 
 
@@ -2003,7 +2692,7 @@ def video_feed():
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + latest_frame.encode('utf-8') + b'\r\n')
             time.sleep(0.033)  # ~30 FPS
-    
+
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
@@ -2011,7 +2700,7 @@ def video_feed():
 def start_preview():
     """Start camera preview stream"""
     global camera, preview_active
-    
+
     with preview_lock:
         if not preview_active:
             try:
@@ -2023,11 +2712,12 @@ def start_preview():
                 return jsonify({'error': str(e)}), 500
         return jsonify({'message': 'Preview already running'}), 200
 
+
 @app.route('/stop_preview', methods=['POST'])
 def stop_preview():
     """Stop camera preview stream"""
     global camera, preview_active
-    
+
     with preview_lock:
         if preview_active:
             preview_active = False
@@ -2035,11 +2725,12 @@ def stop_preview():
             camera = None
         return jsonify({'message': 'Preview stopped'}), 200
 
+
 @app.route('/start_gesture_recording', methods=['POST'])
 def start_gesture_recording():
     """Start recording gesture frames"""
     global recording_frames, recording_active
-    
+
     with recording_lock:
         if not recording_active:
             recording_frames = []
@@ -2050,11 +2741,12 @@ def start_gesture_recording():
             }), 200
         return jsonify({'message': 'Recording already in progress'}), 200
 
+
 @app.route('/stop_gesture_recording', methods=['POST'])
 def stop_gesture_recording():
     """Stop recording and process gesture"""
     global recording_active
-    
+
     with recording_lock:
         recording_active = False
         return jsonify({
@@ -2063,12 +2755,12 @@ def stop_gesture_recording():
             'frames': recording_frames  # Or process frames here
         }), 200
 
+
 if __name__ == '__main__':
     # Start processing in a separate thread
     # processing_thread = threading.Thread(target=process_frames)
     # processing_thread.daemon = True
     # processing_thread.start()
 
-    
     socketio.run(app, host='0.0.0.0', port=5001,
                  debug=True, use_reloader=False)
