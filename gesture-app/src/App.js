@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useEffect, useCallback } from "react"
+import { useState, useRef, useEffect, useCallback, createContext, useContext } from "react"
 import axios from "axios"
 import io from "socket.io-client"
 import {
@@ -37,22 +37,24 @@ import {
   IconButton,
   ChakraProvider,
 } from "@chakra-ui/react"
-
 import { useTheme } from "./ThemeContext"
 import DarkModeToggle from "./DarkModeToggle"
 import { socket } from "./socket"
+
+// Create AppContext for sharing state
+const AppContext = createContext()
 
 // Add this at the top of the file after the imports
 const globalStyles = `
   * {
     box-sizing: border-box;
   }
-  
+
   img {
     max-width: 100%;
     height: auto;
   }
-  
+
   .layout-container {
     contain: layout;
     position: relative;
@@ -296,14 +298,23 @@ const Icons = {
 
 // Sidebar component
 const Sidebar = ({ isOpen, onClose }) => {
-  const [isSmallerThan768, setIsSmallerThan768] = useState(false)
+  const [screenSize, setScreenSize] = useState({
+    isMobile: false,
+    isTablet: false,
+    isDesktop: true
+  })
   const { isDarkMode } = useTheme()
   const bg = isDarkMode ? "gray.800" : "white"
   const borderColor = isDarkMode ? "gray.700" : "gray.200"
 
   useEffect(() => {
     const checkScreenSize = () => {
-      setIsSmallerThan768(window.innerWidth < 768)
+      const width = window.innerWidth
+      setScreenSize({
+        isMobile: width < 480,
+        isTablet: width >= 480 && width < 992,
+        isDesktop: width >= 992
+      })
     }
 
     checkScreenSize()
@@ -314,23 +325,25 @@ const Sidebar = ({ isOpen, onClose }) => {
 
   return (
     <Box
-      position={isSmallerThan768 ? "fixed" : "sticky"}
+      position={screenSize.isMobile || screenSize.isTablet ? "fixed" : "sticky"}
       top="0"
       left="0"
-      height={isSmallerThan768 ? "100vh" : "100%"}
-      width={isSmallerThan768 ? (isOpen ? "200px" : "0") : "200px"}
+      height={(screenSize.isMobile || screenSize.isTablet) ? "100vh" : "100%"}
+      width={(screenSize.isMobile || screenSize.isTablet) ? (isOpen ? (screenSize.isMobile ? "85%" : "350px") : "0") : "300px"}
+      maxWidth={(screenSize.isMobile || screenSize.isTablet) ? "85%" : "300px"}
       transition="width 0.3s ease"
       bg={bg}
       borderRight="1px"
       borderRightColor={borderColor}
       zIndex="999"
       overflowX="hidden"
-      boxShadow={isSmallerThan768 && isOpen ? "lg" : "none"}
+      overflowY="auto"
+      boxShadow={(screenSize.isMobile || screenSize.isTablet) && isOpen ? "lg" : "none"}
       display="flex"
       flexDirection="column"
     >
       {/* Close Button (for Mobile) */}
-      {isSmallerThan768 && (
+      {(screenSize.isMobile || screenSize.isTablet) && (
         <Flex justify="flex-end" p="4">
           <Box as="span" onClick={onClose} cursor="pointer">
             <Icons.CloseIcon />
@@ -338,44 +351,56 @@ const Sidebar = ({ isOpen, onClose }) => {
         </Flex>
       )}
 
-      {/* Sidebar Navigation */}
-      <VStack align="start" spacing="4" p="2" flex="1">
-        <Flex width="100%" justify="space-between" align="center" mb="4">
+      {/* Simplified Sidebar - Only GestureApp and Dark Mode Toggle */}
+      <VStack align="start" spacing="3" p="3" width="100%">
+        <Flex width="100%" justify="space-between" align="center" mb="2">
           <Heading size="md">GestureApp</Heading>
           <DarkModeToggle />
         </Flex>
 
-        <Button leftIcon={<Icons.HomeIcon />} variant="ghost" justifyContent="flex-start" width="100%">
-          Dashboard
-        </Button>
-        <Button leftIcon={<Icons.CameraIcon />} variant="ghost" justifyContent="flex-start" width="100%">
-          Gesture Library
-        </Button>
-        <Button leftIcon={<Icons.ChartIcon />} variant="ghost" justifyContent="flex-start" width="100%">
-          Analytics
-        </Button>
-        {/* <Button leftIcon={<Icons.UserIcon />} variant="ghost" justifyContent="flex-start" width="100%">
-          Profile
-        </Button>
-        <Button leftIcon={<Icons.CogIcon />} variant="ghost" justifyContent="flex-start" width="100%">
-          Settings
-        </Button> */}
+        {/* Instructions moved to sidebar */}
+        <Box width="100%" borderWidth="1px" borderRadius="md" p="3" bg={isDarkMode ? "gray.700" : "gray.50"}>
+          <VStack align="start" spacing="3" width="100%">
+            <Heading size="md" borderBottom="2px" borderColor="blue.500" pb="2" width="100%">Instructions</Heading>
 
-        {/* Spacer pushes help & upgrade buttons to the bottom */}
-        <Spacer />
+            <Box width="100%" p="2" borderRadius="md" bg={isDarkMode ? "gray.800" : "white"}>
+              <Heading size="sm" mb="2" color="blue.500">
+                1. Position Your Hand
+              </Heading>
+              <Text fontSize="sm" textAlign="justify" lineHeight="1.6">
+                Position your hand within the camera frame, making sure it's well-lit and clearly visible.
+              </Text>
+            </Box>
+
+            <Box width="100%" p="2" borderRadius="md" bg={isDarkMode ? "gray.800" : "white"}>
+              <Heading size="sm" mb="2" color="blue.500">
+                2. Make a Gesture
+              </Heading>
+              <Text fontSize="sm" textAlign="justify" lineHeight="1.6">
+                Perform one of the gestures from the library. Hold the gesture steady for accurate recognition.
+              </Text>
+            </Box>
+
+            <Box width="100%" p="2" borderRadius="md" bg={isDarkMode ? "gray.800" : "white"}>
+              <Heading size="sm" mb="2" color="blue.500">
+                3. See Results
+              </Heading>
+              <Text fontSize="sm" textAlign="justify" lineHeight="1.6">
+                The system will identify your gesture and display the result with confidence level in real-time.
+              </Text>
+            </Box>
+
+            <Box width="100%" p="2" borderRadius="md" bg={isDarkMode ? "gray.800" : "white"}>
+              <Heading size="sm" mb="2" color="blue.500">
+                4. Create Custom Gestures
+              </Heading>
+              <Text fontSize="sm" textAlign="justify" lineHeight="1.6">
+                Train the system to recognize your own custom gestures by using the Gesture Library feature.
+              </Text>
+            </Box>
+          </VStack>
+        </Box>
       </VStack>
-
-      {/* Help & Upgrade Buttons - Now Positioned Properly */}
-      <Box p="4">
-        <VStack>
-          <Button leftIcon={<Icons.QuestionIcon />} colorScheme="blue" variant="outline" width="100%">
-            Help Center
-          </Button>
-          {/* <Button colorScheme="blue" width="100%">
-            Upgrade Plan
-          </Button> */}
-        </VStack>
-      </Box>
     </Box>
   )
 }
@@ -494,10 +519,10 @@ const SettingsModal = ({ isOpen, onClose, settings, updateSettings }) => {
 
 
 const CameraFeed = ({ isStreaming, error, imgRef }) => {
+  const socketRef = useRef(socket);
   // Local state for button states with memoized setter to prevent unnecessary re-renders
-  
-  // eslint-disable-next-line 
-  const [buttonStates, setButtonStates] = useState({
+  // We only need the setter function for the socket events
+  const [, setButtonStates] = useState({
     button1: false,
     button2: false,
     button3: false,
@@ -505,6 +530,9 @@ const CameraFeed = ({ isStreaming, error, imgRef }) => {
 
   // Connect WebSocket events for gesture data and button updates
   useEffect(() => {
+    // Store a reference to the socket that won't change during cleanup
+    const currentSocket = socketRef.current;
+
     // Handle button updates from the server
     const handleButtonUpdate = (data) => {
       const { button, state } = data;
@@ -531,14 +559,15 @@ const CameraFeed = ({ isStreaming, error, imgRef }) => {
       }
     };
 
-    socket.on("button_update", handleButtonUpdate);
-    socket.on("gesture_update", handleGestureUpdate);
+    currentSocket.on("button_update", handleButtonUpdate);
+    currentSocket.on("gesture_update", handleGestureUpdate);
 
     return () => {
-      socket.off("button_update", handleButtonUpdate);
-      socket.off("gesture_update", handleGestureUpdate);
+      // Use the stored reference in cleanup to avoid the exhaustive-deps warning
+      currentSocket.off("button_update", handleButtonUpdate);
+      currentSocket.off("gesture_update", handleGestureUpdate);
     };
-  }, [imgRef]);
+  }, [imgRef]); // socketRef is intentionally omitted as we're using a local reference
 
   // Container with aspect ratio matching the backend camera (1280x720)
   return (
@@ -647,27 +676,45 @@ const CameraFeed = ({ isStreaming, error, imgRef }) => {
 };
 
 const GestureDataDisplay = ({ gestureData, buttonStates }) => {
+  const { currentMode } = useContext(AppContext) || { currentMode: 'general_recognition' };
   const { isDarkMode } = useTheme()
   const borderColor = isDarkMode ? "gray.700" : "gray.200"
   const textColorValue = isDarkMode ? "gray.300" : "gray.600" // Use this for text color
 
   return (
-    <VStack spacing={2} align="stretch" h="100%" p={2}>
-      <Heading size="md" mb={2}>
+    <VStack spacing={2} align="space-" h="100%" p={0}>
+      <Heading size="md" mb={2} px={2} pt={2}>
         Live Gesture Data
       </Heading>
-      <Divider />
+      <Divider mx={0} />
 
-      <Box>
+      <Box px={2} pt={1}>
+        <Text fontWeight="bold" fontSize="md">
+          Current Mode:
+        </Text>
+        <Badge
+          colorScheme={currentMode === 'home_automation' ? "purple" : "blue"}
+          p={2}
+          fontSize="sm"
+          mt={1}
+          width="100%"
+          textAlign="center"
+          display="block"
+        >
+          {currentMode === 'home_automation' ? 'Home Automation Mode' : 'General Recognition Mode'}
+        </Badge>
+      </Box>
+
+      <Box px={2} pt={1}>
         <Text fontWeight="bold" fontSize="md">
           Detected Gesture:
         </Text>
-        <Badge colorScheme="green" p={2} fontSize="sm" mt={1}>
+        <Badge colorScheme="green" p={2} fontSize="sm" mt={1} width="100%" textAlign="center" display="block">
           {gestureData.gesture}
         </Badge>
       </Box>
 
-      <Grid templateColumns="repeat(2, 1fr)" gap={2}>
+      <Grid templateColumns={{ base: "1fr", sm: "repeat(2, 1fr)" }} gap={2} px={2}>
         <Box p={2} borderWidth="1px" borderRadius="md" borderColor={borderColor}>
           <Text fontWeight="semibold" mb={1}>
             Confidence
@@ -697,87 +744,45 @@ const GestureDataDisplay = ({ gestureData, buttonStates }) => {
         </Box>
       </Grid>
 
-      <Box mt={2}>
+      <Box mt={2} px={2}>
         <Text fontSize="sm" color={textColorValue}>
           Try different gestures to see how accurately they're detected. Move your hand for optimal visibility.
         </Text>
       </Box>
-      <Box p={2} borderWidth="1px" borderRadius="md" borderColor={borderColor}>
+      <Box p={2} borderWidth="1px" borderRadius="md" borderColor={borderColor} mx={2}>
         <Text fontWeight="semibold" mb={1}>
           Status Controls
         </Text>
-        <HStack spacing={2}>
+        <VStack spacing={2} width="100%">
           {Object.entries(buttonStates).map(([key, value]) => (
-            <Flex
+            <Button
               key={key}
-              align="center"
-              p={2}
-              borderRadius="md"
-              bg={value ? "green.100" : "red.100"}
-              borderWidth="1px"
-              borderColor={value ? "green.300" : "red.300"}
-              minW="120px" // Set a fixed minimum width
+              size="sm"
+              variant="outline"
+              colorScheme={value ? "green" : "red"}
+              leftIcon={<Box w="8px" h="8px" borderRadius="full" bg={value ? "green.500" : "red.500"} />}
+              mb={1}
+              isActive={value}
+              _active={{ bg: value ? "green.100" : "red.100" }}
+              width="100%"
             >
-              <Box w="8px" h="8px" borderRadius="full" bg={value ? "green.500" : "red.500"} mr={2} />
-              <Text fontSize="sm" fontWeight="medium">
-                {key.replace("button", "Button ")}: {value ? "Active" : "Inactive"}
-              </Text>
-            </Flex>
+              {key === "button1" ? "Fan" : key === "button2" ? "Pump" : "Light"}: {value ? "Active" : "Inactive"}
+            </Button>
           ))}
-        </HStack>
+        </VStack>
       </Box>
     </VStack>
   )
 }
 
-// Instructions Component
-const Instructions = () => {
-  return (
-    <VStack p="2" align="start" spacing="3" h="100%" overflowY="auto">
-      <Heading size="md">Instructions</Heading>
-
-      <Box>
-        <Heading size="sm" mb="2">
-          1. Position Your Hand
-        </Heading>
-        <Text fontSize="sm">
-          Position your hand within the camera frame, making sure it's well-lit and clearly visible.
-        </Text>
-      </Box>
-      <Divider />
-      <Box>
-        <Heading size="sm" mb="2">
-          2. Make a Gesture
-        </Heading>
-        <Text fontSize="sm">
-          Perform one of the gestures from the library below. Hold the gesture steady for recognition.
-        </Text>
-      </Box>
-      <Divider />
-      <Box>
-        <Heading size="sm" mb="2">
-          3. See Results
-        </Heading>
-        <Text fontSize="sm">
-          The system will identify your gesture and display the result at the bottom of the camera feed.
-        </Text>
-      </Box>
-      <Divider />
-      <Box>
-        <Heading size="sm" mb="2">
-          4. Create Custom Gestures
-        </Heading>
-        <Text fontSize="sm">Train the system to recognize your own custom gestures by using the Gesture Library.</Text>
-      </Box>
-    </VStack>
-  )
-}
+// Instructions Component has been moved directly into the Sidebar
 
 // GestureCard Component
-const GestureCard = ({ title, description, image }) => {
+const GestureCard = ({ title, description, children, image }) => {
   const { isDarkMode } = useTheme()
   const bg = isDarkMode ? "gray.700" : "white"
   const textColor = isDarkMode ? "gray.300" : "gray.600"
+  const accentColor = "blue.500"
 
   return (
     <Box
@@ -786,27 +791,70 @@ const GestureCard = ({ title, description, image }) => {
       overflow="hidden"
       bg={bg}
       boxShadow="md"
-      transition="transform 0.2s"
-      _hover={{ transform: "translateY(-5px)" }}
+      transition="all 0.3s ease"
+      _hover={{ transform: "translateY(-5px)", boxShadow: "lg", borderColor: accentColor }}
+      position="relative"
     >
-      <Box h="160px" bg="gray.200" position="relative">
-        {image ? (
-          <Box as="img" src={image} alt={title} objectFit="cover" w="100%" h="100%" />
+      {/* Image Container with Overlay */}
+      <Box h="160px" bg={isDarkMode ? "gray.600" : "gray.100"} position="relative" overflow="hidden">
+        {children ? (
+          <Flex h="100%" justify="center" align="center" p="4">
+            {children}
+          </Flex>
+        ) : image ? (
+          <>
+            <Box
+              as="img"
+              src={image}
+              alt={title}
+              objectFit="cover"
+              w="100%"
+              h="100%"
+              transition="transform 0.3s ease"
+              _groupHover={{ transform: "scale(1.05)" }}
+            />
+            <Box
+              position="absolute"
+              top="0"
+              left="0"
+              right="0"
+              bottom="0"
+              bg="blackAlpha.300"
+              opacity="0"
+              transition="opacity 0.3s ease"
+              _groupHover={{ opacity: 1 }}
+            />
+          </>
         ) : (
-          <Flex h="100%" justify="center" align="center" bg="gray.100">
+          <Flex h="100%" justify="center" align="center">
             <Icons.CameraIcon />
           </Flex>
         )}
       </Box>
 
+      {/* Content */}
       <Box p="4">
-        <Heading size="md" mb="2">
+        <Heading size="md" mb="2" color={isDarkMode ? "blue.300" : "blue.600"}>
           {title}
         </Heading>
-        <Text fontSize="sm" color={textColor}>
+        <Text fontSize="sm" color={textColor} textAlign="justify" lineHeight="1.6">
           {description}
         </Text>
       </Box>
+
+      {/* Badge in corner */}
+      <Badge
+        position="absolute"
+        top="2"
+        right="2"
+        colorScheme="blue"
+        variant="solid"
+        fontSize="xs"
+        borderRadius="full"
+        px="2"
+      >
+        Gesture
+      </Badge>
     </Box>
   )
 }
@@ -815,7 +863,14 @@ const GestureCard = ({ title, description, image }) => {
 const App = () => {
   // State for responsive design
   const [isSidebarOpen, setSidebarOpen] = useState(false)
-  const [isSmallerThan768, setIsSmallerThan768] = useState(false)
+  const [screenSize, setScreenSize] = useState({
+    isMobile: false,
+    isTablet: false,
+    isDesktop: true
+  })
+
+  // Current mode state
+  const [currentMode, setCurrentMode] = useState('general_recognition')
 
   // Theme state
   const { isDarkMode } = useTheme()
@@ -941,6 +996,11 @@ const App = () => {
       setIsStreaming(status === "active")
     })
 
+    socketRef.current.on("mode_change", (data) => {
+      console.log("Mode changed:", data.mode)
+      setCurrentMode(data.mode)
+    })
+
     socketRef.current.on("disconnect", () => {
       console.log("Disconnected from WebSocket server")
       setIsStreaming(false)
@@ -956,6 +1016,7 @@ const App = () => {
         socketRef.current.off("gesture_update")
         socketRef.current.off("button_update")
         socketRef.current.off("system_status")
+        socketRef.current.off("mode_change")
         socketRef.current.off("disconnect")
       }
     }
@@ -1007,6 +1068,7 @@ const App = () => {
   // Function to start gesture detection
   const startDetection = useCallback(async () => {
     try {
+      console.log("Starting detection...")
       setError(null)
       const response = await axios.post(`${FLASK_SERVER}/start_detection`, {
         settings: {
@@ -1014,6 +1076,7 @@ const App = () => {
           resolution: settings.resolution,
         },
       })
+      console.log("Start detection response:", response.data)
       if (response.data.status === "Detection Started") {
         console.log("Detection started successfully")
         setIsStreaming(true)
@@ -1067,7 +1130,12 @@ const App = () => {
   // Check screen size for responsive design
   useEffect(() => {
     const checkScreenSize = () => {
-      setIsSmallerThan768(window.innerWidth < 768)
+      const width = window.innerWidth
+      setScreenSize({
+        isMobile: width < 480,
+        isTablet: width >= 480 && width < 992,
+        isDesktop: width >= 992
+      })
     }
 
     checkScreenSize()
@@ -1077,11 +1145,12 @@ const App = () => {
   }, [])
 
   return (
-    <ChakraProvider>
-      <style>{globalStyles}</style>
-      <Box bg={bgColor} minH="100vh">
+    <AppContext.Provider value={{ currentMode, setCurrentMode }}>
+      <ChakraProvider>
+        <style>{globalStyles}</style>
+        <Box bg={bgColor} minH="100vh">
         {/* Mobile Header with Menu Toggle */}
-        {isSmallerThan768 && (
+        {(screenSize.isMobile || screenSize.isTablet) && (
           <Flex as="header" bg={headerBg} p="4" align="center" borderBottom="1px" borderBottomColor={borderColor}>
             <IconButton
               icon={<Icons.MenuIcon />}
@@ -1097,16 +1166,16 @@ const App = () => {
         )}
 
         {/* Main Content with Sidebar */}
-        <Flex>
-          <Sidebar isOpen={isSmallerThan768 ? isSidebarOpen : true} onClose={() => setSidebarOpen(false)} />
+        <Flex gap="0">
+          <Sidebar isOpen={(screenSize.isMobile || screenSize.isTablet) ? isSidebarOpen : true} onClose={() => setSidebarOpen(false)} />
 
           {/* Main Content Area */}
-          <Box flex="1" p="4">
-            <Container maxW="container.xl" p="0">
-              <Grid templateColumns={{ base: "1fr", md: "3fr 1fr" }} gap="4">
+          <Box flex="1" p="2">
+            <Container maxW="container.xl" p="0" ml="0">
+              <Grid templateColumns={{ base: "1fr", md: "2.5fr 1fr" }} gap="2">
                 {/* Left Column */}
                 <GridItem>
-                  <VStack spacing="4" align="stretch">
+                  <VStack spacing="3" align="stretch">
                     {/* Top toolbar */}
                     <Flex
                       justify="space-between"
@@ -1127,13 +1196,30 @@ const App = () => {
                             variant="ghost"
                           />
                         </Tooltip>
-                        <Button
-                          leftIcon={isStreaming ? <Icons.PauseIcon /> : <Icons.PlayIcon />}
-                          colorScheme={isStreaming ? "red" : "green"}
-                          onClick={isStreaming ? stopDetection : startDetection}
-                        >
-                          {isStreaming ? "Stop Detection" : "Start Detection"}
-                        </Button>
+                        <HStack>
+                          <Button
+                            leftIcon={isStreaming ? <Icons.PauseIcon /> : <Icons.PlayIcon />}
+                            colorScheme={isStreaming ? "red" : "green"}
+                            onClick={isStreaming ? stopDetection : startDetection}
+                          >
+                            {isStreaming ? "Stop Detection" : "Start Detection"}
+                          </Button>
+                          <Button
+                            colorScheme={currentMode === 'home_automation' ? "purple" : "blue"}
+                            onClick={() => {
+                              const newMode = currentMode === 'home_automation' ? 'general_recognition' : 'home_automation';
+                              axios.post(`${FLASK_SERVER}/set_mode`, { mode: newMode })
+                                .then(response => {
+                                  console.log('Mode switched:', response.data);
+                                })
+                                .catch(err => {
+                                  console.error('Error switching mode:', err);
+                                });
+                            }}
+                          >
+                            {currentMode === 'home_automation' ? "Switch to General Mode" : "Switch to Home Automation"}
+                          </Button>
+                        </HStack>
                       </HStack>
                     </Flex>
 
@@ -1144,7 +1230,7 @@ const App = () => {
                       borderRadius="lg"
                       borderWidth="1px"
                       borderColor={borderColor}
-                      height="500px"
+                      height={{ base: "auto", md: "500px" }}
                     >
                       <CameraFeed isStreaming={isStreaming} error={error} imgRef={imgRef} />
                     </Box>
@@ -1153,23 +1239,23 @@ const App = () => {
                     <Box bg={headerBg} p="4" borderRadius="lg" borderWidth="1px" borderColor={borderColor}>
                       <Flex justify="space-between" align="center" mb="4">
                         <Heading size="md">Gesture Library</Heading>
-                        <Button colorScheme="blue" size="sm">
-                          Create Custom Gesture
-                        </Button>
                       </Flex>
 
                       <Grid templateColumns={{ base: "1fr", sm: "1fr 1fr", lg: "repeat(3, 1fr)" }} gap="4">
                         <GestureCard
                           title="Thumbs Up"
                           description="A simple thumbs up gesture for positive feedback or approval."
+                          image="thumsup.jpeg"
                         />
                         <GestureCard
                           title="Open Hand"
                           description="An open palm hand gesture for stopping or greeting."
+                          image="open.jpeg"
                         />
                         <GestureCard
                           title="Victory"
                           description="A V-shape with index and middle fingers for victory or peace."
+                          image="peace.jpeg"
                         />
                       </Grid>
                     </Box>
@@ -1178,16 +1264,13 @@ const App = () => {
 
                 {/* Right Column */}
                 <GridItem>
-                  <VStack spacing="4" align="stretch">
+                  <VStack spacing="3" align="stretch">
                     {/* Live Data Display */}
-                    <Box bg={headerBg} p="4" borderRadius="lg" borderWidth="1px" borderColor={borderColor}>
+                    <Box bg={headerBg} p="0" borderRadius="lg" borderWidth="1px" borderColor={borderColor}>
                       <GestureDataDisplay gestureData={gestureData} buttonStates={buttonStates} />
                     </Box>
 
-                    {/* Instructions Card */}
-                    <Box bg={headerBg} p="4" borderRadius="lg" borderWidth="1px" borderColor={borderColor}>
-                      <Instructions />
-                    </Box>
+                    {/* Instructions Card removed - now in sidebar */}
                   </VStack>
                 </GridItem>
               </Grid>
@@ -1204,6 +1287,7 @@ const App = () => {
         />
       </Box>
     </ChakraProvider>
+    </AppContext.Provider>
   )
 }
 
